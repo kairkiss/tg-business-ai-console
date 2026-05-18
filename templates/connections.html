@@ -1,0 +1,1 @@
+{% extends "base.html" %}{% block content %}<h1>Telegram 连接</h1><section class="chat-cards">{% for c in connections %}<article class="chat-card"><h2>{{ c.business_connection_id }}</h2><p>user_id：{{ c.user_id }} · enabled：{{ c.is_enabled }}</p><small>更新时间：{{ c.updated_at }}</small><pre>{{ c.rights_json }}</pre></article>{% endfor %}</section>{% endblock %}

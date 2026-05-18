@@ -1,0 +1,8 @@
+{% extends "base.html" %}{% block content %}
+<h1>Settings</h1><form class="form" method="post" action="/settings"><input type="hidden" name="csrf" value="{{ csrf_token }}">
+<label><input type="checkbox" name="global_enabled" value="true" {% if settings.global_enabled == 'true' %}checked{% endif %}> global_enabled</label>
+<label>default_reply_mode<select name="default_reply_mode"><option value="auto" {% if settings.default_reply_mode=='auto' %}selected{% endif %}>auto</option><option value="manual" {% if settings.default_reply_mode=='manual' %}selected{% endif %}>manual</option><option value="off" {% if settings.default_reply_mode=='off' %}selected{% endif %}>off</option></select></label>
+<label>system_prompt<textarea name="system_prompt" rows="9">{{ settings.system_prompt }}</textarea></label>
+<label>deepseek_model<input name="deepseek_model" value="{{ settings.deepseek_model }}"></label><label>deepseek_temperature<input name="deepseek_temperature" value="{{ settings.deepseek_temperature }}"></label><label>deepseek_max_tokens<input name="deepseek_max_tokens" value="{{ settings.deepseek_max_tokens }}"></label><label>max_history_messages<input name="max_history_messages" value="{{ settings.max_history_messages }}"></label><label>non_text_reply<input name="non_text_reply" value="{{ settings.non_text_reply }}"></label>
+<label><input type="checkbox" name="safety_mode_enabled" value="true" {% if settings.safety_mode_enabled == 'true' %}checked{% endif %}> safety_mode_enabled</label><button>保存</button></form>
+{% endblock %}

@@ -1,0 +1,1 @@
+{% extends "base.html" %}{% block content %}<h1>系统设置</h1><section class="panel"><h2>运行配置</h2><p>这里只显示必要状态，不显示 .env 内容和密钥。</p><table>{% for k,v in env.items() %}<tr><th>{{ k }}</th><td>{{ v }}</td></tr>{% endfor %}</table><div class="hint">8787 端口只建议局域网或 Cloudflare Access 后面使用。不要直接暴露到公网。</div></section>{% endblock %}
