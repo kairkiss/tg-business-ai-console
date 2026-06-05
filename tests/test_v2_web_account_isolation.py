@@ -6,12 +6,13 @@ These tests verify that:
 - /accounts/{id}/conversations only shows that account's conversations
 - /accounts/{id}/conversations/{cid} rejects cross-account access
 - /conversations/{cid} redirects to account-scoped URL
+- connection id is masked in web views
+- update_account does not allow latest_business_connection_id
 """
 
 from __future__ import annotations
 
 import pytest
-from unittest.mock import MagicMock
 
 
 # ---------------------------------------------------------------------------
@@ -216,30 +217,38 @@ class TestConnectionIdMasking:
         """Verify connection ID is masked on /accounts page."""
         import db
 
-        # Create account with a known connection ID
-        account_id = db.create_account("1002", "测试账号 2")
-        db.update_account(account_id, {
-            "enabled": 1,
-            "latest_business_connection_id": "bc_very_long_connection_id_123456789",
-        })
+        # Create account via proper sync flow
+        connection_data = {
+            "id": "bc_very_long_connection_id_123456789",
+            "user": {"id": 1002, "first_name": "测试"},
+            "user_chat_id": 1002,
+            "is_enabled": True,
+        }
+        account_id = db.sync_business_account_from_connection(connection_data)
+        db.upsert_business_connection(connection_data)
+        db.update_account(account_id, {"enabled": 1})
 
         response = client.get("/accounts")
         assert response.status_code == 200
         # Should NOT contain full connection ID
         assert "bc_very_long_connection_id_123456789" not in response.text
-        # Should contain connection status (either 已连接 or 未连接)
+        # Should contain connection status
         assert "连接" in response.text
 
     def test_connection_id_is_masked_on_account_detail_page(self, client, initialized_db):
         """Verify connection ID is masked on /accounts/{id} page."""
         import db
 
-        # Create account with a known connection ID
-        account_id = db.create_account("1003", "测试账号 3")
-        db.update_account(account_id, {
-            "enabled": 1,
-            "latest_business_connection_id": "abcdefghijklmnop",
-        })
+        # Create account via proper sync flow
+        connection_data = {
+            "id": "abcdefghijklmnop",
+            "user": {"id": 1003, "first_name": "测试3"},
+            "user_chat_id": 1003,
+            "is_enabled": True,
+        }
+        account_id = db.sync_business_account_from_connection(connection_data)
+        db.upsert_business_connection(connection_data)
+        db.update_account(account_id, {"enabled": 1})
 
         response = client.get(f"/accounts/{account_id}")
         assert response.status_code == 200
@@ -249,3 +258,38 @@ class TestConnectionIdMasking:
         assert "abcdef...mnop" in response.text
         # Should show connection status
         assert "已连接" in response.text
+
+
+class TestAccountUpdateBoundary:
+    """Tests for account update field restrictions."""
+
+    def test_update_account_does_not_allow_latest_business_connection_id(self, initialized_db):
+        """Verify update_account() rejects latest_business_connection_id field."""
+        import db
+
+        # Create account via proper sync flow
+        connection_data = {
+            "id": "bc_original_connection_id",
+            "user": {"id": 1004, "first_name": "测试4"},
+            "user_chat_id": 1004,
+            "is_enabled": True,
+        }
+        account_id = db.sync_business_account_from_connection(connection_data)
+        db.upsert_business_connection(connection_data)
+
+        # Verify original connection id
+        account = db.get_account(account_id)
+        assert account["latest_business_connection_id"] == "bc_original_connection_id"
+
+        # Try to override via update_account (should be ignored)
+        db.update_account(account_id, {
+            "latest_business_connection_id": "bc_fake_override_attempt",
+            "enabled": 1,
+        })
+
+        # Verify connection id was NOT changed
+        account = db.get_account(account_id)
+        assert account["latest_business_connection_id"] == "bc_original_connection_id"
+        assert account["latest_business_connection_id"] != "bc_fake_override_attempt"
+        # But enabled should be updated
+        assert account["enabled"] == 1

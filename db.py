@@ -638,7 +638,7 @@ def get_account(account_id):
 
 
 def update_account(account_id, values):
-    allowed = {"account_name","enabled","full_takeover_enabled","default_reply_mode","default_prompt_persona_id","media_handling_mode","message_debounce_enabled","human_like_enabled","output_filter_enabled","quote_reply_enabled","note","last_message_at","latest_business_connection_id"}
+    allowed = {"account_name","enabled","full_takeover_enabled","default_reply_mode","default_prompt_persona_id","media_handling_mode","message_debounce_enabled","human_like_enabled","output_filter_enabled","quote_reply_enabled","note","last_message_at"}
     sets=[]; params=[]
     for k,v in values.items():
         if k in allowed:
