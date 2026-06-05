@@ -917,14 +917,16 @@ def resolve_account_for_business_connection(data: dict):
     """
     Resolve account from a Telegram business_connection update object.
 
-    Internally calls sync_business_account_from_connection() to ensure
-    the account record is up-to-date, then returns the account dict.
+    Ensures both business_accounts and business_connections tables are up-to-date,
+    then returns the account dict.
 
     This does NOT make network requests.
     """
-    account_id = sync_business_account_from_connection(data)
-    if account_id:
-        return get_account(account_id)
+    # upsert_business_connection already calls sync_business_account_from_connection internally
+    upsert_business_connection(data)
+    bc_id = data.get("id") or data.get("business_connection_id")
+    if bc_id:
+        return get_account_by_business_connection_id(bc_id)
     return None
 
 

@@ -191,7 +191,6 @@ class TestActorClassification:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason="v2 account isolation not implemented yet: v2 decide_reply not implemented")
 class TestReplyDecision:
     """Tests for reply decision logic with account isolation."""
 
@@ -216,7 +215,7 @@ class TestReplyDecision:
         account = db.get_account(account_id)
         settings = db.get_settings()
 
-        should_reply, reason = runner.decide_reply(conv, account, settings)
+        should_reply, reason = runner.decide_reply_v2(conv, account, settings)
         assert should_reply is True
         assert "auto" in reason.lower()
 
@@ -243,25 +242,25 @@ class TestReplyDecision:
         conv_id = db.create_conversation(account_id, 5001, "private", "A")
         db.update_conversation(conv_id, {"mode": "auto"})
         conv = db.get_conversation_by_id(conv_id)
-        should_reply, _ = runner.decide_reply(conv, account, settings)
+        should_reply, _ = runner.decide_reply_v2(conv, account, settings)
         assert should_reply is True
 
         # manual → don't reply
         db.update_conversation(conv_id, {"mode": "manual"})
         conv = db.get_conversation_by_id(conv_id)
-        should_reply, _ = runner.decide_reply(conv, account, settings)
+        should_reply, _ = runner.decide_reply_v2(conv, account, settings)
         assert should_reply is False
 
         # off → don't reply
         db.update_conversation(conv_id, {"mode": "off"})
         conv = db.get_conversation_by_id(conv_id)
-        should_reply, _ = runner.decide_reply(conv, account, settings)
+        should_reply, _ = runner.decide_reply_v2(conv, account, settings)
         assert should_reply is False
 
         # default → follow account default (manual)
         db.update_conversation(conv_id, {"mode": "default"})
         conv = db.get_conversation_by_id(conv_id)
-        should_reply, reason = runner.decide_reply(conv, account, settings)
+        should_reply, reason = runner.decide_reply_v2(conv, account, settings)
         assert should_reply is False
         assert "manual" in reason.lower()
 
@@ -290,7 +289,7 @@ class TestReplyDecision:
         db.update_conversation(conv_x, {"mode": "default"})
         conv_x_data = db.get_conversation_by_id(conv_x)
         account_x_data = db.get_account(account_x)
-        should_reply_x, _ = runner.decide_reply(conv_x_data, account_x_data, settings)
+        should_reply_x, _ = runner.decide_reply_v2(conv_x_data, account_x_data, settings)
         assert should_reply_x is True
 
         # Conversation under account Y (manual)
@@ -298,7 +297,7 @@ class TestReplyDecision:
         db.update_conversation(conv_y, {"mode": "default"})
         conv_y_data = db.get_conversation_by_id(conv_y)
         account_y_data = db.get_account(account_y)
-        should_reply_y, _ = runner.decide_reply(conv_y_data, account_y_data, settings)
+        should_reply_y, _ = runner.decide_reply_v2(conv_y_data, account_y_data, settings)
         assert should_reply_y is False
 
 
@@ -480,3 +479,149 @@ class TestAccountResolution:
         found = db.get_account_by_business_connection_id("bc_new_789")
         assert found is not None
         assert found["id"] == result["id"]
+
+
+# ---------------------------------------------------------------------------
+# System Message Classification Tests
+# ---------------------------------------------------------------------------
+
+
+class TestSystemClassification:
+    """Tests for system message classification."""
+
+    def test_system_message_classified_correctly(self, initialized_db):
+        """
+        Requirement: Service/system messages must be classified as 'system'.
+        """
+        from bot import BotRunner
+
+        runner = BotRunner()
+        runner.bot_id = 12345
+
+        # Test various service message types
+        service_messages = [
+            {"new_chat_members": [{"id": 1}], "chat": {"id": 100}},
+            {"left_chat_member": {"id": 1}, "chat": {"id": 100}},
+            {"pinned_message": {"message_id": 1}, "chat": {"id": 100}},
+            {"new_chat_title": "New Title", "chat": {"id": 100}},
+            {"group_chat_created": True, "chat": {"id": 100}},
+            {"video_chat_started": {}, "chat": {"id": 100}},
+        ]
+
+        for msg in service_messages:
+            actor_type = runner.classify_actor(msg)
+            assert actor_type == "system", f"Expected 'system' for {list(msg.keys())}, got '{actor_type}'"
+
+
+# ---------------------------------------------------------------------------
+# Bot v2 Integration Tests
+# ---------------------------------------------------------------------------
+
+
+class TestBotV2Integration:
+    """Integration tests for bot v2 message handling."""
+
+    def test_non_customer_actor_does_not_enter_reply_path(self, initialized_db):
+        """
+        Requirement: Non-customer messages must not trigger AI reply path.
+
+        We test this by verifying that classify_actor returns the correct type
+        and that the handle_business_message flow would skip AI for non-customer.
+        """
+        from bot import BotRunner
+
+        runner = BotRunner()
+        runner.bot_id = 12345
+
+        account = {"business_user_id": "1001", "id": 1}
+
+        # business_self
+        msg_self = {"from": {"id": 999}, "sender_business_bot": True, "text": "test"}
+        assert runner.classify_actor(msg_self, account) == "business_self"
+
+        # assistant_bot
+        msg_bot = {"from": {"id": 12345}, "text": "test"}
+        assert runner.classify_actor(msg_bot, account) == "assistant_bot"
+
+        # owner_operator
+        msg_owner = {"from": {"id": 99999}, "text": "test"}
+        assert runner.classify_actor(msg_owner, account) == "owner_operator"
+
+        # customer
+        msg_customer = {"from": {"id": 55555}, "text": "test"}
+        assert runner.classify_actor(msg_customer, account) == "customer"
+
+    def test_business_message_records_to_v2_conversation(self, initialized_db):
+        """
+        Requirement: Messages must be recorded in messages_v2 with correct actor_type.
+        """
+        import db
+
+        # Create account
+        account_id = db.create_account("1001", "测试账号")
+
+        # Create conversation
+        conv_id = db.create_conversation(account_id, 5001, "private", "用户 A")
+
+        # Record a customer message
+        db.add_message_v2(conv_id, account_id, 100, "in", "customer", "你好", "text")
+
+        # Record a business_self message
+        db.add_message_v2(conv_id, account_id, 101, "out", "business_self", "我自己发的", "text")
+
+        # Record an assistant_bot message
+        db.add_message_v2(conv_id, account_id, 102, "out", "assistant_bot", "AI 回复", "text")
+
+        # Get context - only customer and assistant_bot (out) should appear
+        ctx = db.recent_context_v2(conv_id, 10)
+        assert len(ctx) == 2
+        assert ctx[0]["role"] == "user"      # customer
+        assert ctx[0]["content"] == "你好"
+        assert ctx[1]["role"] == "assistant"  # assistant_bot out
+        assert ctx[1]["content"] == "AI 回复"
+
+        # business_self should NOT appear in context
+        contents = [m["content"] for m in ctx]
+        assert "我自己发的" not in contents
+
+    def test_same_peer_text_messages_under_two_accounts_use_separate_context(self, initialized_db):
+        """
+        Requirement: Same peer under different accounts must have separate contexts.
+
+        This is the key multi-account isolation test.
+        """
+        import db
+
+        # Create two accounts
+        account_x = db.create_account("1001", "账号 X")
+        account_y = db.create_account("1002", "账号 Y")
+
+        # Same peer
+        peer_chat_id = 5001
+
+        # Create conversations
+        conv_x = db.create_conversation(account_x, peer_chat_id, "private", "用户 A")
+        conv_y = db.create_conversation(account_y, peer_chat_id, "private", "用户 A")
+
+        # Add different messages to each
+        db.add_message_v2(conv_x, account_x, 1, "in", "customer", "给 X 的消息", "text")
+        db.add_message_v2(conv_x, account_x, 2, "out", "assistant_bot", "X 的 AI 回复", "text")
+
+        db.add_message_v2(conv_y, account_y, 3, "in", "customer", "给 Y 的消息", "text")
+        db.add_message_v2(conv_y, account_y, 4, "out", "assistant_bot", "Y 的 AI 回复", "text")
+
+        # Context for X
+        ctx_x = db.recent_context_v2(conv_x, 10)
+        assert len(ctx_x) == 2
+        assert ctx_x[0]["content"] == "给 X 的消息"
+        assert ctx_x[1]["content"] == "X 的 AI 回复"
+
+        # Context for Y
+        ctx_y = db.recent_context_v2(conv_y, 10)
+        assert len(ctx_y) == 2
+        assert ctx_y[0]["content"] == "给 Y 的消息"
+        assert ctx_y[1]["content"] == "Y 的 AI 回复"
+
+        # Verify no cross-contamination
+        assert "给 Y 的消息" not in [m["content"] for m in ctx_x]
+        assert "给 X 的消息" not in [m["content"] for m in ctx_y]
