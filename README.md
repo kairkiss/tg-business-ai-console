@@ -60,9 +60,32 @@ cp .env.example .env
 # Install dependencies
 pip install -r requirements.txt
 
-# Run
-uvicorn app:app --host 0.0.0.0 --port 8787
+# Run (listens on localhost only by default)
+uvicorn app:app --host 127.0.0.1 --port 8787
 ```
+
+By default, the server only listens on `127.0.0.1` to avoid accidentally exposing the admin console to the public Internet.
+
+### Remote Access
+
+To access from another machine, use an SSH tunnel:
+
+```bash
+# From your local machine:
+ssh -L 8787:127.0.0.1:8787 user@your-server
+
+# Then open in browser:
+# http://127.0.0.1:8787
+```
+
+### When to use `--host 0.0.0.0`
+
+Only use `--host 0.0.0.0` when:
+
+- You are on a **trusted private network** (e.g., home LAN, VPN), OR
+- The server is **behind Cloudflare Access / Tailscale / VPN / reverse proxy authentication**
+
+**Do not expose this admin console directly to the public Internet.**
 
 ---
 
