@@ -2,6 +2,7 @@
 
 > 分支: v2.0-account-isolation
 > 更新: 2026-06-05
+> Phase: 5A (release readiness documentation)
 
 ---
 
@@ -64,9 +65,7 @@ recent_context_v2(conversation_id, limit, exclude_message_ids):
 
 ---
 
-## Known Incomplete Areas
-
-### Web UI
+## Web UI Status
 
 - ✅ `/accounts` 列出所有 Business 账号
 - ✅ `/accounts` 页面同时显示 v2 conversation_count 与 legacy chat_count
@@ -77,46 +76,48 @@ recent_context_v2(conversation_id, limit, exclude_message_ids):
 - ✅ conversation 设置保存只影响目标 conversation，不影响同 peer 其它账号
 - ✅ 跨账号 POST 被拒绝 (404)
 - ✅ 非法 mode/prompt_mode 返回 400
+- ✅ persona_id 非数字返回 400
+- ✅ CSRF 校验有效
 - ✅ `/conversations/{cid}` 快捷重定向到 account-scoped URL
 - ✅ 跨账号访问返回 404
 - ✅ conversation settings save 校验 CSRF、persona_id 类型、mode/prompt_mode 合法性
 - 旧 `/chats/{chat_id}` 路由保留 (标记为 Legacy)
 
-### Media Group
+---
 
-- 媒体组处理已接入 v2 conversation
-- 非文本媒体组只记录不回复 (简化处理)
-- 媒体组 caption 使用账号级 settings ✅
-
-### Legacy Compatibility
+## Legacy Compatibility
 
 - 旧 `chats` 表保留，用于兼容
 - 旧 `messages` 表保留，用于兼容
 - 旧 bot.py 方法 (decide_reply, process_text_batch 等) 保留但不再被主路径使用
 - 新数据写入 v2 表 (conversations, messages_v2)
-
-### Documentation
-
-- README 尚未完整更新 v2 运行说明
-- 部署文档需要更新
+- legacy /chats 路由标记为 Legacy，不建议用于多账号设置
 
 ---
 
-## Do Not Release As Stable Until
+## Phase History
 
-- [x] Web 只读视图完成 (Phase 4A)
-- [ ] Web 设置修改路由完成
-- [ ] templates 完全产品化
-- [ ] README 更新
-- [ ] 部署文档更新
-- [ ] 创建 release/tag
+| Phase | 内容 | 状态 |
+|-------|------|------|
+| Phase 0 | pytest 基础设施与 SQLite 备份脚本 | ✅ |
+| Phase 1 | v2 schema、conversations/messages_v2、user_version=6 | ✅ |
+| Phase 2 | account resolution helpers、actor classification | ✅ |
+| Phase 3A | Bot 文本消息主路径接入 v2 | ✅ |
+| Phase 3B | 上下文去重、async 测试、媒体组账号级 settings | ✅ |
+| Phase 3C | 测试描述清理、文档同步 | ✅ |
+| Phase 4A | Web 账号隔离只读视图 | ✅ |
+| Phase 4A-polish | conversation_count 显示、connection id 脱敏 | ✅ |
+| Phase 4A-polish-2 | account update boundary 收紧 | ✅ |
+| Phase 4B | Web conversation 设置保存 | ✅ |
+| Phase 4B-polish | CSRF/persona_id 校验补强 | ✅ |
+| Phase 5A | 收口文档 + 发布前审计清单 | ✅ |
 
 ---
 
 ## Test Coverage
 
 ```
-40 passed, 0 xfailed
+59 passed, 0 xfailed
 ```
 
 测试覆盖:
@@ -128,3 +129,19 @@ recent_context_v2(conversation_id, limit, exclude_message_ids):
 - 异步 handle_business_message (async message handling)
 - 媒体组账号设置 (media group account settings)
 - 账号解析 (account resolution)
+- Web 账号隔离视图
+- Web conversation 设置保存
+- CSRF / cross-account / persona_id 验证
+
+---
+
+## Do Not Release As Stable Until
+
+- [x] Web 只读视图完成
+- [x] Web 设置修改路由完成
+- [x] README 更新
+- [x] 发布前审计清单
+- [ ] owner 手动测试至少两个 Telegram Business 账号
+- [ ] 同 peer 在不同账号下验证隔离
+- [ ] templates 完全产品化
+- [ ] 创建 release/tag
