@@ -169,7 +169,122 @@ def init_db() -> None:
             current = conn.execute("SELECT value FROM settings WHERE key='default_prompt_persona_id'").fetchone()
             if not current or not str(current["value"] or "").strip():
                 conn.execute("INSERT INTO settings(key,value,updated_at) VALUES('default_prompt_persona_id',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", (str(default["id"]), ts))
-        conn.execute("PRAGMA user_version=5")
+        # --- v2 schema: account isolation ---
+        # Create v2 tables if they don't exist
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            business_account_id INTEGER NOT NULL,
+            peer_chat_id TEXT NOT NULL,
+            peer_type TEXT,
+            peer_title TEXT,
+            peer_username TEXT,
+            peer_first_name TEXT,
+            peer_last_name TEXT,
+            mode TEXT NOT NULL DEFAULT 'default',
+            prompt_mode TEXT NOT NULL DEFAULT 'account',
+            persona_id INTEGER,
+            custom_prompt TEXT,
+            custom_prompt_enabled INTEGER NOT NULL DEFAULT 0,
+            takeover_exempt INTEGER NOT NULL DEFAULT 0,
+            note TEXT,
+            last_message_at TEXT,
+            last_ai_intro_at TEXT,
+            last_media_reply_at TEXT,
+            last_filter_triggered_at TEXT,
+            last_auto_reply_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(business_account_id, peer_chat_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversations_account_updated
+            ON conversations(business_account_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_conversations_account_last_message
+            ON conversations(business_account_id, last_message_at DESC);
+
+        CREATE TABLE IF NOT EXISTS messages_v2 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL,
+            business_account_id INTEGER NOT NULL,
+            telegram_message_id INTEGER,
+            direction TEXT NOT NULL,
+            actor_type TEXT NOT NULL,
+            text TEXT,
+            message_type TEXT NOT NULL DEFAULT 'text',
+            raw_json TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_messages_v2_conversation_created
+            ON messages_v2(conversation_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_messages_v2_account_created
+            ON messages_v2(business_account_id, created_at DESC, id DESC);
+        """)
+
+        # Migration from v5 to v6: best-effort copy chats with business_account_id
+        current_version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if current_version < 6:
+            # Best-effort migration: only migrate chats that have a clear business_account_id
+            conn.execute("""
+                INSERT OR IGNORE INTO conversations (
+                    business_account_id, peer_chat_id, peer_type,
+                    peer_title, peer_username, peer_first_name, peer_last_name,
+                    mode, prompt_mode, persona_id, custom_prompt, custom_prompt_enabled,
+                    takeover_exempt, note, last_message_at,
+                    last_ai_intro_at, last_media_reply_at, last_filter_triggered_at,
+                    last_auto_reply_at, created_at, updated_at
+                )
+                SELECT
+                    c.business_account_id,
+                    CAST(c.chat_id AS TEXT),
+                    'private',
+                    c.title, c.username, c.first_name, c.last_name,
+                    c.mode, c.prompt_mode, c.prompt_persona_id,
+                    c.custom_prompt, c.custom_prompt_enabled,
+                    c.takeover_exempt, c.note, c.last_message_at,
+                    c.last_ai_intro_at, c.last_media_reply_at, c.last_filter_triggered_at,
+                    c.last_auto_reply_at, c.created_at, c.updated_at
+                FROM chats c
+                WHERE c.business_account_id IS NOT NULL
+            """)
+            # Best-effort migration: only migrate messages that can be matched to a conversation
+            conn.execute("""
+                INSERT INTO messages_v2 (
+                    conversation_id, business_account_id, telegram_message_id,
+                    direction, actor_type, text, message_type, raw_json, created_at
+                )
+                SELECT
+                    conv.id,
+                    conv.business_account_id,
+                    m.message_id,
+                    m.direction,
+                    CASE
+                        WHEN m.role = 'user' THEN 'customer'
+                        WHEN m.role = 'assistant' THEN 'assistant_bot'
+                        WHEN m.role = 'system' THEN 'system'
+                        ELSE 'unknown'
+                    END,
+                    m.text,
+                    COALESCE(m.message_type, 'text'),
+                    m.raw_json,
+                    m.created_at
+                FROM messages m
+                JOIN conversations conv
+                    ON conv.peer_chat_id = CAST(m.chat_id AS TEXT)
+                    AND conv.business_account_id = (
+                        SELECT c.business_account_id
+                        FROM chats c
+                        WHERE c.chat_id = m.chat_id
+                          AND c.business_account_id IS NOT NULL
+                        LIMIT 1
+                    )
+                WHERE m.conversation_key IS NOT NULL
+                   OR m.chat_id IN (SELECT CAST(peer_chat_id AS INTEGER) FROM conversations)
+            """)
+            conn.execute("PRAGMA user_version=6")
+
+        # If this is a fresh database, set version to 6 directly
+        if current_version == 0:
+            conn.execute("PRAGMA user_version=6")
 
 
 def row_to_dict(row):
@@ -527,3 +642,234 @@ def resolve_account_settings(settings, account):
     if account.get("default_prompt_persona_id"):
         effective["account_default_prompt_persona_id"] = str(account["default_prompt_persona_id"])
     return effective
+
+
+# ---------------------------------------------------------------------------
+# v2 Account Isolation Helpers
+# ---------------------------------------------------------------------------
+
+VALID_ACTOR_TYPES = {"customer", "business_self", "assistant_bot", "owner_operator", "system", "unknown"}
+
+
+def create_account(platform_user_id: str, display_name: str) -> int:
+    """
+    Create a new business account or return existing one.
+    Returns the account id.
+    """
+    ts = now_iso()
+    with connect() as conn:
+        row = conn.execute("SELECT id FROM business_accounts WHERE business_user_id=?", (platform_user_id,)).fetchone()
+        if row:
+            return int(row["id"])
+        cur = conn.execute(
+            """INSERT INTO business_accounts(business_user_id, account_name, enabled, full_takeover_enabled, default_reply_mode, created_at, updated_at)
+               VALUES(?, ?, 1, 0, 'manual', ?, ?)""",
+            (platform_user_id, display_name, ts, ts)
+        )
+        return int(cur.lastrowid)
+
+
+def create_conversation(
+    business_account_id: int,
+    peer_chat_id: int | str,
+    peer_type: str = "private",
+    peer_title: str | None = None,
+    peer_username: str | None = None,
+    peer_first_name: str | None = None,
+    peer_last_name: str | None = None,
+) -> int:
+    """
+    Create a conversation or return existing one (upsert).
+    peer_chat_id is stored as TEXT for consistency.
+    Returns the conversation id.
+    """
+    peer_chat_id_str = str(peer_chat_id)
+    ts = now_iso()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM conversations WHERE business_account_id=? AND peer_chat_id=?",
+            (business_account_id, peer_chat_id_str)
+        ).fetchone()
+        if row:
+            return int(row["id"])
+        cur = conn.execute(
+            """INSERT INTO conversations (
+                business_account_id, peer_chat_id, peer_type,
+                peer_title, peer_username, peer_first_name, peer_last_name,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (business_account_id, peer_chat_id_str, peer_type,
+             peer_title, peer_username, peer_first_name, peer_last_name,
+             ts, ts)
+        )
+        return int(cur.lastrowid)
+
+
+def get_conversation(business_account_id: int, peer_chat_id: int | str):
+    """
+    Get conversation by account and peer_chat_id.
+    """
+    peer_chat_id_str = str(peer_chat_id)
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM conversations WHERE business_account_id=? AND peer_chat_id=?",
+            (business_account_id, peer_chat_id_str)
+        ).fetchone()
+    return row_to_dict(row)
+
+
+def get_conversation_by_id(conversation_id: int):
+    """
+    Get conversation by its id.
+    """
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM conversations WHERE id=?", (conversation_id,)).fetchone()
+    return row_to_dict(row)
+
+
+def list_conversations(business_account_id: int):
+    """
+    List all conversations for a given account.
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM conversations WHERE business_account_id=? ORDER BY updated_at DESC",
+            (business_account_id,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def find_conversations_by_peer_chat_id(peer_chat_id: int | str):
+    """
+    Find all conversations with a given peer_chat_id across all accounts.
+    """
+    peer_chat_id_str = str(peer_chat_id)
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM conversations WHERE peer_chat_id=? ORDER BY business_account_id",
+            (peer_chat_id_str,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+CONVERSATION_ALLOWED_FIELDS = {
+    "mode", "prompt_mode", "persona_id", "custom_prompt", "custom_prompt_enabled",
+    "takeover_exempt", "note", "last_message_at", "last_ai_intro_at",
+    "last_media_reply_at", "last_filter_triggered_at", "last_auto_reply_at",
+    "peer_title", "peer_username", "peer_first_name", "peer_last_name",
+}
+
+
+def update_conversation(conversation_id: int, values: dict):
+    """
+    Update conversation fields (whitelist only).
+    """
+    sets = []
+    params = []
+    for k, v in values.items():
+        if k in CONVERSATION_ALLOWED_FIELDS:
+            sets.append(f"{k}=?")
+            params.append(v)
+    if not sets:
+        return
+    sets.append("updated_at=?")
+    params.append(now_iso())
+    params.append(conversation_id)
+    with connect() as conn:
+        conn.execute(f"UPDATE conversations SET {', '.join(sets)} WHERE id=?", params)
+
+
+def update_conversation_peer(conversation_id: int, chat: dict):
+    """
+    Update peer information from a Telegram chat object.
+    """
+    update_conversation(conversation_id, {
+        "peer_title": chat.get("title"),
+        "peer_username": chat.get("username"),
+        "peer_first_name": chat.get("first_name"),
+        "peer_last_name": chat.get("last_name"),
+    })
+
+
+def add_message_v2(
+    conversation_id: int,
+    business_account_id: int,
+    telegram_message_id: int | None,
+    direction: str,
+    actor_type: str,
+    text: str | None,
+    message_type: str = "text",
+    raw_json=None,
+):
+    """
+    Record a message in the v2 messages table.
+    actor_type must be one of VALID_ACTOR_TYPES.
+    """
+    if actor_type not in VALID_ACTOR_TYPES:
+        raise ValueError(f"Invalid actor_type: {actor_type}. Must be one of {VALID_ACTOR_TYPES}")
+    ts = now_iso()
+    raw = raw_json
+    if raw_json is not None and not isinstance(raw_json, str):
+        raw = json.dumps(raw_json, ensure_ascii=False)[:12000]
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO messages_v2 (
+                conversation_id, business_account_id, telegram_message_id,
+                direction, actor_type, text, message_type, raw_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (conversation_id, business_account_id, telegram_message_id,
+             direction, actor_type, text, message_type, raw, ts)
+        )
+
+
+def recent_context_v2(conversation_id: int, limit: int):
+    """
+    Get recent context for LLM consumption.
+
+    Returns messages formatted for LLM:
+    - actor_type == customer → role=user
+    - actor_type == assistant_bot AND direction=out → role=assistant
+    - All others are excluded from LLM context
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT actor_type, direction, text FROM messages_v2
+               WHERE conversation_id=? AND text IS NOT NULL AND text != ''
+               ORDER BY id DESC LIMIT ?""",
+            (conversation_id, limit)
+        ).fetchall()
+
+    result = []
+    for r in reversed(rows):
+        actor = r["actor_type"]
+        direction = r["direction"]
+        text = r["text"]
+
+        if actor == "customer":
+            result.append({"role": "user", "content": text})
+        elif actor == "assistant_bot" and direction == "out":
+            result.append({"role": "assistant", "content": text})
+        # business_self, owner_operator, system, unknown are excluded
+
+    return result
+
+
+def list_messages_v2(conversation_id: int, limit: int = 100):
+    """
+    List messages for a conversation (for display purposes).
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM messages_v2 WHERE conversation_id=? ORDER BY id DESC LIMIT ?",
+            (conversation_id, limit)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def forget_conversation(conversation_id: int):
+    """
+    Delete all messages for a conversation.
+    Only affects the specified conversation.
+    """
+    with connect() as conn:
+        conn.execute("DELETE FROM messages_v2 WHERE conversation_id=?", (conversation_id,))

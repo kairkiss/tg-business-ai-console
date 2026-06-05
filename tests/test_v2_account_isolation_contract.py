@@ -5,7 +5,7 @@ These tests define the behavioral contract for the v2 multi-account isolation fe
 They are expected to FAIL (xfail) until the v2 implementation is complete.
 
 Each test corresponds to a requirement from the v2 design document:
-- reports/v2-account-isolation-design.md
+- docs/v2-account-isolation-design.md
 
 When implementing v2, change xfail markers to regular tests as each feature is completed.
 """
@@ -20,7 +20,6 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason="v2 account isolation not implemented yet: conversations table does not exist")
 class TestConversationIsolation:
     """Tests for conversation-level isolation between accounts."""
 
@@ -309,7 +308,6 @@ class TestReplyDecision:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason="v2 account isolation not implemented yet: forget_conversation not implemented")
 class TestContextManagement:
     """Tests for conversation context management."""
 
@@ -351,7 +349,6 @@ class TestContextManagement:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason="v2 account isolation not implemented yet: v2 web routes not implemented")
 class TestWebIsolation:
     """Tests for Web console account isolation."""
 

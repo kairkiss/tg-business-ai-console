@@ -80,3 +80,28 @@ def initialized_db(tmp_db):
 
     db.init_db()
     return tmp_db
+
+
+# ---------------------------------------------------------------------------
+# Network access guard
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _no_real_network(monkeypatch):
+    """
+    Prevent tests from making real network requests.
+
+    If a test needs network access, it must explicitly monkeypatch
+    the relevant client with a fake implementation.
+    """
+    import httpx
+
+    def _blocked_request(*args, **kwargs):
+        raise RuntimeError(
+            "Network access is disabled in tests. "
+            "If this test needs network, monkeypatch the client with a fake."
+        )
+
+    # Block httpx.AsyncClient.request
+    monkeypatch.setattr(httpx.AsyncClient, "request", _blocked_request)
+    # Block httpx.Client.request (sync)
+    monkeypatch.setattr(httpx.Client, "request", _blocked_request)

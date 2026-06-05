@@ -123,7 +123,7 @@ class TestInitDb:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         conn.close()
 
-        assert version == 5  # Current version
+        assert version == 6  # v2 schema version
 
     def test_init_db_inserts_default_settings(self, tmp_db):
         import db
