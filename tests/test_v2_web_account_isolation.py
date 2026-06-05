@@ -184,3 +184,68 @@ class TestConversationShortcut:
         """Verify shortcut returns 404 for nonexistent conversation."""
         response = client.get("/conversations/99999", follow_redirects=False)
         assert response.status_code == 404
+
+
+class TestAccountCountDisplay:
+    """Tests for account count display on /accounts page."""
+
+    def test_accounts_page_shows_v2_and_legacy_counts(self, client, initialized_db):
+        """Verify /accounts page shows both v2 conversation count and legacy chat count."""
+        import db
+
+        # Create account
+        account_id = db.create_account("1001", "测试账号")
+        db.update_account(account_id, {"enabled": 1})
+
+        # Create a v2 conversation
+        conv_id = db.create_conversation(account_id, 5001, "private", "用户 A")
+
+        # Check the accounts page
+        response = client.get("/accounts")
+        assert response.status_code == 200
+        # Should show v2 conversation count
+        assert "v2 对话数：1" in response.text
+        # Should show legacy chat count
+        assert "Legacy 聊天数：0" in response.text
+
+
+class TestConnectionIdMasking:
+    """Tests for connection ID masking on web pages."""
+
+    def test_connection_id_is_masked_on_accounts_page(self, client, initialized_db):
+        """Verify connection ID is masked on /accounts page."""
+        import db
+
+        # Create account with a known connection ID
+        account_id = db.create_account("1002", "测试账号 2")
+        db.update_account(account_id, {
+            "enabled": 1,
+            "latest_business_connection_id": "bc_very_long_connection_id_123456789",
+        })
+
+        response = client.get("/accounts")
+        assert response.status_code == 200
+        # Should NOT contain full connection ID
+        assert "bc_very_long_connection_id_123456789" not in response.text
+        # Should contain connection status (either 已连接 or 未连接)
+        assert "连接" in response.text
+
+    def test_connection_id_is_masked_on_account_detail_page(self, client, initialized_db):
+        """Verify connection ID is masked on /accounts/{id} page."""
+        import db
+
+        # Create account with a known connection ID
+        account_id = db.create_account("1003", "测试账号 3")
+        db.update_account(account_id, {
+            "enabled": 1,
+            "latest_business_connection_id": "abcdefghijklmnop",
+        })
+
+        response = client.get(f"/accounts/{account_id}")
+        assert response.status_code == 200
+        # Should NOT contain full connection ID
+        assert "abcdefghijklmnop" not in response.text
+        # Should contain masked form
+        assert "abcdef...mnop" in response.text
+        # Should show connection status
+        assert "已连接" in response.text

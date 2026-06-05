@@ -16,6 +16,22 @@ router=APIRouter(); templates=Jinja2Templates(directory="templates")
 templates.env.globals["mode_label"] = lambda m: {"auto":"自动","manual":"手动","off":"关闭","default":"默认"}.get(m or "default", m)
 
 
+def mask_id(value: str | None, keep_start: int = 6, keep_end: int = 4) -> str:
+    """
+    Mask an ID for display. Shows partial start/end with ... in middle.
+    Not for tokens/API keys - just for connection IDs etc.
+    """
+    if not value:
+        return "-"
+    s = str(value)
+    if len(s) <= keep_start + keep_end + 3:
+        return "***"
+    return f"{s[:keep_start]}...{s[-keep_end:]}"
+
+
+templates.env.globals["mask_id"] = mask_id
+
+
 def csrf_token(request):
     token=request.session.get("csrf")
     if not token: token=secrets.token_urlsafe(32); request.session["csrf"]=token
@@ -135,7 +151,7 @@ async def account_conversation_detail(request: Request, account_id: int, convers
     account = db.get_account(account_id)
     if not account:
         raise HTTPException(404, "账号不存在")
-    conversation = db.get_conversation_by_id(conversation_id)
+    conversation, conv_account = db.get_conversation_with_account(conversation_id)
     if not conversation:
         raise HTTPException(404, "对话不存在")
     # Validate account isolation: conversation must belong to this account
@@ -153,7 +169,7 @@ async def account_conversation_detail(request: Request, account_id: int, convers
 @router.get("/conversations/{conversation_id}")
 async def conversation_shortcut(request: Request, conversation_id: int, _: None = Depends(require_auth)):
     """Shortcut redirect: /conversations/{id} → /accounts/{account_id}/conversations/{id}"""
-    conversation = db.get_conversation_by_id(conversation_id)
+    conversation, account = db.get_conversation_with_account(conversation_id)
     if not conversation:
         raise HTTPException(404, "对话不存在")
     account_id = conversation["business_account_id"]

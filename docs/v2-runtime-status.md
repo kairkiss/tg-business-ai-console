@@ -69,6 +69,8 @@ recent_context_v2(conversation_id, limit, exclude_message_ids):
 ### Web UI
 
 - ✅ `/accounts` 列出所有 Business 账号
+- ✅ `/accounts` 页面同时显示 v2 conversation_count 与 legacy chat_count
+- ✅ connection id 在模板中脱敏显示 (mask_id)
 - ✅ `/accounts/{id}/conversations` 显示该账号的 v2 conversations
 - ✅ `/accounts/{id}/conversations/{cid}` 显示 conversation 详情 (含消息)
 - ✅ `/conversations/{cid}` 快捷重定向到 account-scoped URL

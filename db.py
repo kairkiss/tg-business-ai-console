@@ -611,8 +611,24 @@ def get_account_by_connection(business_connection_id):
 
 def list_accounts():
     with connect() as conn:
-        rows = conn.execute("""SELECT a.*, p.name AS persona_name, COUNT(c.chat_id) AS chat_count FROM business_accounts a LEFT JOIN prompt_personas p ON a.default_prompt_persona_id=p.id LEFT JOIN chats c ON c.business_account_id=a.id GROUP BY a.id ORDER BY a.updated_at DESC, a.id DESC""").fetchall()
-    return [dict(r) for r in rows]
+        rows = conn.execute("""
+            SELECT a.*, p.name AS persona_name,
+                   COUNT(DISTINCT c.chat_id) AS legacy_chat_count,
+                   COUNT(DISTINCT cv.id) AS conversation_count
+            FROM business_accounts a
+            LEFT JOIN prompt_personas p ON a.default_prompt_persona_id = p.id
+            LEFT JOIN chats c ON c.business_account_id = a.id
+            LEFT JOIN conversations cv ON cv.business_account_id = a.id
+            GROUP BY a.id
+            ORDER BY a.updated_at DESC, a.id DESC
+        """).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        # Keep chat_count as alias for backward compatibility
+        d["chat_count"] = d.get("legacy_chat_count", 0)
+        result.append(d)
+    return result
 
 
 def get_account(account_id):
@@ -622,7 +638,7 @@ def get_account(account_id):
 
 
 def update_account(account_id, values):
-    allowed = {"account_name","enabled","full_takeover_enabled","default_reply_mode","default_prompt_persona_id","media_handling_mode","message_debounce_enabled","human_like_enabled","output_filter_enabled","quote_reply_enabled","note","last_message_at"}
+    allowed = {"account_name","enabled","full_takeover_enabled","default_reply_mode","default_prompt_persona_id","media_handling_mode","message_debounce_enabled","human_like_enabled","output_filter_enabled","quote_reply_enabled","note","last_message_at","latest_business_connection_id"}
     sets=[]; params=[]
     for k,v in values.items():
         if k in allowed:
