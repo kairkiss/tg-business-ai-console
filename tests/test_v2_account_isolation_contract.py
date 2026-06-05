@@ -91,7 +91,6 @@ class TestConversationIsolation:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason="v2 account isolation not implemented yet: classify_actor does not exist")
 class TestActorClassification:
     """Tests for message actor classification."""
 
@@ -382,3 +381,102 @@ class TestWebIsolation:
         conv_ids_x = {c["id"] for c in convs_x}
         conv_ids_y = {c["id"] for c in convs_y}
         assert conv_ids_x.isdisjoint(conv_ids_y)
+
+
+# ---------------------------------------------------------------------------
+# Account Resolution Tests
+# ---------------------------------------------------------------------------
+
+
+class TestAccountResolution:
+    """Tests for account resolution helpers."""
+
+    def test_get_account_by_business_connection_id_returns_account(self, initialized_db):
+        """
+        Requirement: get_account_by_business_connection_id() must find
+        account by its latest_business_connection_id.
+        """
+        import db
+
+        # Create an account via sync_business_account_from_connection
+        # which properly sets latest_business_connection_id
+        data = {
+            "id": "bc_test_123",
+            "user": {"id": 1001, "first_name": "Test"},
+            "user_chat_id": 1001,
+            "is_enabled": True,
+        }
+        account_id = db.sync_business_account_from_connection(data)
+        assert account_id is not None
+
+        # Test the new helper
+        result = db.get_account_by_business_connection_id("bc_test_123")
+        assert result is not None
+        assert result["id"] == account_id
+
+        # Test with None
+        result2 = db.get_account_by_business_connection_id(None)
+        assert result2 is None
+
+    def test_get_latest_connection_for_account_returns_connection(self, initialized_db):
+        """
+        Requirement: get_latest_connection_for_account() must return
+        the latest business_connection for an account.
+        """
+        import db
+
+        # Create account via sync_business_account_from_connection
+        data = {
+            "id": "bc_conn_456",
+            "user": {"id": 1002, "first_name": "Test2"},
+            "user_chat_id": 1002,
+            "is_enabled": True,
+        }
+        account_id = db.sync_business_account_from_connection(data)
+        assert account_id is not None
+
+        # Also create the business_connection record (sync_business_account_from_connection
+        # only creates the account, not the connection record)
+        db.upsert_business_connection(data)
+
+        # Now test get_latest_connection_for_account
+        result = db.get_latest_connection_for_account(account_id)
+        assert result is not None
+        assert result["business_connection_id"] == "bc_conn_456"
+        assert result["user_id"] == 1002
+
+        # Test with non-existent account
+        result2 = db.get_latest_connection_for_account(99999)
+        assert result2 is None
+
+    def test_resolve_account_for_business_connection(self, initialized_db):
+        """
+        Requirement: resolve_account_for_business_connection() must create or
+        update account from a Telegram business_connection update object.
+        """
+        import db
+
+        # Simulate a Telegram business_connection update
+        data = {
+            "id": "bc_new_789",
+            "user": {
+                "id": 55555,
+                "first_name": "Test",
+                "last_name": "User",
+                "username": "testuser"
+            },
+            "user_chat_id": 55555,
+            "is_enabled": True,
+            "can_reply": True,
+        }
+
+        # This should create or update the account
+        result = db.resolve_account_for_business_connection(data)
+        assert result is not None
+        assert result["business_user_id"] == "55555"
+        assert result["latest_business_connection_id"] == "bc_new_789"
+
+        # Verify the account can be found by connection_id
+        found = db.get_account_by_business_connection_id("bc_new_789")
+        assert found is not None
+        assert found["id"] == result["id"]

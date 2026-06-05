@@ -140,6 +140,53 @@ class BotRunner:
             return True
         return False
 
+    def classify_actor(self, msg: dict, account: dict | None = None) -> str:
+        """
+        Classify the sender of a Telegram message.
+
+        Returns one of:
+        - "customer": the conversation partner (triggers AI auto-reply)
+        - "business_self": the Business account owner (via Telegram client)
+        - "assistant_bot": the bot itself
+        - "owner_operator": the owner (Kai) sending directly
+        - "system": system messages
+        - "unknown": cannot determine sender
+        """
+        if not isinstance(msg, dict):
+            return "unknown"
+
+        sender = msg.get("from") or {}
+        sender_id = sender.get("id")
+
+        # 1. Bot itself
+        if self.bot_id and sender_id == self.bot_id:
+            return "assistant_bot"
+
+        # 2. sender_business_bot flag (Telegram marks messages from business account owner)
+        if msg.get("sender_business_bot"):
+            return "business_self"
+
+        # 3. Owner operator
+        if sender_id is not None and str(sender_id) in set(Config.bot_owner_ids):
+            return "owner_operator"
+
+        # 4. Check if sender matches the business account identity
+        if account and sender_id is not None:
+            account_user_id = account.get("business_user_id")
+            account_chat_id = account.get("user_chat_id")
+            sender_id_str = str(sender_id)
+            if account_user_id and sender_id_str == str(account_user_id):
+                return "business_self"
+            if account_chat_id and sender_id_str == str(account_chat_id):
+                return "business_self"
+
+        # 5. Regular customer
+        if sender_id is not None:
+            return "customer"
+
+        # 6. Cannot determine
+        return "unknown"
+
     def detect_message_type(self, msg: dict[str, Any]) -> str:
         if msg.get("text"):
             return "text"

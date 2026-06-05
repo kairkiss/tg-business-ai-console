@@ -221,6 +221,23 @@ def init_db() -> None:
         """)
 
         # Migration from v5 to v6: best-effort copy chats with business_account_id
+        #
+        # IMPORTANT: Legacy migration is best-effort only.
+        #
+        # The old chats table uses chat_id as PRIMARY KEY, which means:
+        # - If the same peer_chat_id appeared under multiple business accounts,
+        #   only the LAST write survived (ON CONFLICT DO UPDATE).
+        # - Historical data may already have been overwritten/merged incorrectly.
+        #
+        # Therefore:
+        # - Legacy chats/messages migration is best-effort, NOT authoritative.
+        # - Only chats with a clear business_account_id are migrated.
+        # - Chats without business_account_id are NOT migrated (no guessing).
+        # - The v2 runtime (conversations/messages_v2) is the single source of truth
+        #   going forward.
+        # - Old chats/messages tables are preserved for reference but should NOT
+        #   be used for multi-account operations.
+        #
         current_version = conn.execute("PRAGMA user_version").fetchone()[0]
         if current_version < 6:
             # Best-effort migration: only migrate chats that have a clear business_account_id
@@ -873,3 +890,59 @@ def forget_conversation(conversation_id: int):
     """
     with connect() as conn:
         conn.execute("DELETE FROM messages_v2 WHERE conversation_id=?", (conversation_id,))
+
+
+# ---------------------------------------------------------------------------
+# Account Resolution Helpers
+# ---------------------------------------------------------------------------
+
+def get_account_by_business_connection_id(business_connection_id: str | None):
+    """
+    Find business account by business_connection_id.
+
+    Looks up business_accounts.latest_business_connection_id.
+    Returns account dict or None.
+    """
+    if not business_connection_id:
+        return None
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM business_accounts WHERE latest_business_connection_id=?",
+            (business_connection_id,)
+        ).fetchone()
+    return row_to_dict(row)
+
+
+def resolve_account_for_business_connection(data: dict):
+    """
+    Resolve account from a Telegram business_connection update object.
+
+    Internally calls sync_business_account_from_connection() to ensure
+    the account record is up-to-date, then returns the account dict.
+
+    This does NOT make network requests.
+    """
+    account_id = sync_business_account_from_connection(data)
+    if account_id:
+        return get_account(account_id)
+    return None
+
+
+def get_latest_connection_for_account(account_id: int):
+    """
+    Get the latest business_connection for a given account.
+
+    Returns business_connections dict or None.
+    """
+    account = get_account(account_id)
+    if not account:
+        return None
+    bc_id = account.get("latest_business_connection_id")
+    if not bc_id:
+        return None
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM business_connections WHERE business_connection_id=?",
+            (bc_id,)
+        ).fetchone()
+    return row_to_dict(row)
