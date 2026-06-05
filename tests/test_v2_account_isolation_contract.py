@@ -625,3 +625,318 @@ class TestBotV2Integration:
         # Verify no cross-contamination
         assert "给 Y 的消息" not in [m["content"] for m in ctx_x]
         assert "给 X 的消息" not in [m["content"] for m in ctx_y]
+
+
+# ---------------------------------------------------------------------------
+# Context De-duplication Tests
+# ---------------------------------------------------------------------------
+
+
+class TestContextDeduplication:
+    """Tests for context de-duplication via exclude_message_ids."""
+
+    def test_generate_reply_v2_excludes_current_batch_from_context(self, initialized_db, monkeypatch):
+        """
+        Requirement: generate_reply_v2 must exclude current batch messages
+        from LLM context to avoid duplication with merged_text.
+
+        We verify by capturing the messages passed to deepseek.chat.
+        """
+        import db
+        from bot import BotRunner
+
+        runner = BotRunner()
+        runner.bot_id = 12345
+
+        # Create account and conversation
+        account_id = db.create_account("1001", "测试账号")
+        conv_id = db.create_conversation(account_id, 5001, "private", "用户 A")
+
+        # Add a historical message
+        db.add_message_v2(conv_id, account_id, 1, "in", "customer", "历史消息", "text")
+
+        # Add the "current" message (this would be excluded)
+        current_row_id = db.add_message_v2(conv_id, account_id, 2, "in", "customer", "当前消息", "text")
+
+        # Capture messages sent to deepseek.chat
+        captured_messages = []
+        original_chat = runner.deepseek.chat
+
+        async def fake_chat(messages, *args, **kwargs):
+            captured_messages.extend(messages)
+            return "AI 回复"
+
+        monkeypatch.setattr(runner.deepseek, "chat", fake_chat)
+
+        # Call generate_reply_v2 with exclude
+        import asyncio
+        settings = db.get_settings()
+        resolved = {"prompt": "test", "model": "deepseek-chat", "temperature": 0.7, "max_tokens": 800}
+        asyncio.run(runner.generate_reply_v2(
+            conv_id, settings, resolved, "当前消息",
+            exclude_message_ids=[current_row_id],
+        ))
+
+        # Verify: historical message should be in context
+        # Current message should NOT appear as a historical context item
+        # It should only appear as the final merged_text
+        contents = [m["content"] for m in captured_messages]
+        assert "历史消息" in contents
+        # The current message should appear exactly once (as the final user message)
+        assert contents.count("当前消息") == 1
+        # It should be the last message
+        assert contents[-1] == "当前消息"
+
+
+# ---------------------------------------------------------------------------
+# Async Handle Business Message Tests
+# ---------------------------------------------------------------------------
+
+
+class TestHandleBusinessMessage:
+    """Async tests for the full handle_business_message flow."""
+
+    @pytest.mark.asyncio
+    async def test_handle_business_message_non_customer_does_not_call_ai_or_send(
+        self, initialized_db, monkeypatch
+    ):
+        """
+        Requirement: Non-customer messages (business_self, owner_operator, etc.)
+        must be recorded but must NOT trigger DeepSeek or Telegram send.
+        """
+        import asyncio
+        import db
+        from bot import BotRunner
+
+        runner = BotRunner()
+        runner.bot_id = 12345
+
+        # Create account and connection
+        account_data = {
+            "id": "bc_test_001",
+            "user": {"id": 1001, "first_name": "Kai"},
+            "user_chat_id": 1001,
+            "is_enabled": True,
+        }
+        account_id = db.sync_business_account_from_connection(account_data)
+        db.upsert_business_connection(account_data)
+
+        # Track if AI or send was called
+        ai_called = asyncio.Event()
+        send_called = asyncio.Event()
+
+        async def fake_deepseek_chat(*args, **kwargs):
+            ai_called.set()
+            return "Should not be called"
+
+        async def fake_send_message(*args, **kwargs):
+            send_called.set()
+            return {"message_id": 999}
+
+        monkeypatch.setattr(runner.deepseek, "chat", fake_deepseek_chat)
+        monkeypatch.setattr(runner.telegram, "send_message", fake_send_message)
+
+        # Test business_self message
+        msg_self = {
+            "from": {"id": 1001, "first_name": "Kai"},
+            "sender_business_bot": True,
+            "text": "我自己发的消息",
+            "chat": {"id": 5001, "type": "private"},
+            "message_id": 100,
+            "business_connection_id": "bc_test_001",
+        }
+
+        await runner.handle_business_message(msg_self)
+
+        # Verify: message recorded, but AI/send NOT called
+        assert not ai_called.is_set(), "DeepSeek should not be called for business_self"
+        assert not send_called.is_set(), "Telegram send should not be called for business_self"
+
+        # Verify message was recorded
+        account = db.get_account(account_id)
+        conv = db.get_conversation(account_id, 5001)
+        assert conv is not None
+        msgs = db.list_messages_v2(conv["id"], 10)
+        assert len(msgs) == 1
+        assert msgs[0]["actor_type"] == "business_self"
+
+        # Reset events
+        ai_called.clear()
+        send_called.clear()
+
+        # Test owner_operator message
+        msg_owner = {
+            "from": {"id": 99999, "first_name": "Owner"},
+            "text": "Owner 发的消息",
+            "chat": {"id": 5002, "type": "private"},
+            "message_id": 101,
+            "business_connection_id": "bc_test_001",
+        }
+
+        await runner.handle_business_message(msg_owner)
+
+        assert not ai_called.is_set(), "DeepSeek should not be called for owner_operator"
+        assert not send_called.is_set(), "Telegram send should not be called for owner_operator"
+
+    @pytest.mark.asyncio
+    async def test_handle_business_message_customer_text_uses_v2_context_and_sends(
+        self, initialized_db, monkeypatch
+    ):
+        """
+        Requirement: Customer text messages should trigger AI and send reply
+        via v2 conversation model, using correct business_connection_id.
+        """
+        import asyncio
+        import db
+        from bot import BotRunner
+
+        runner = BotRunner()
+        runner.bot_id = 12345
+
+        # Create account with auto mode
+        account_data = {
+            "id": "bc_test_002",
+            "user": {"id": 2001, "first_name": "Business"},
+            "user_chat_id": 2001,
+            "is_enabled": True,
+        }
+        account_id = db.sync_business_account_from_connection(account_data)
+        db.upsert_business_connection(account_data)
+        db.update_account(account_id, {"enabled": 1, "default_reply_mode": "auto"})
+
+        # Track calls
+        deepseek_messages = []
+        sent_messages = []
+
+        async def fake_deepseek_chat(messages, *args, **kwargs):
+            deepseek_messages.extend(messages)
+            return "收到，我来处理。"
+
+        async def fake_send_message(bc_id, chat_id, text, reply_to=None, **kwargs):
+            sent_messages.append({
+                "bc_id": bc_id,
+                "chat_id": chat_id,
+                "text": text,
+                "reply_to": reply_to,
+            })
+            return {"message_id": 999}
+
+        async def fake_send_chat_action(*args, **kwargs):
+            pass
+
+        monkeypatch.setattr(runner.deepseek, "chat", fake_deepseek_chat)
+        monkeypatch.setattr(runner.telegram, "send_message", fake_send_message)
+        monkeypatch.setattr(runner.telegram, "send_chat_action", fake_send_chat_action)
+
+        # Disable debounce and human delay for testing
+        # Save original to avoid recursion
+        original_get_settings = db.get_settings
+        def patched_get_settings():
+            settings = original_get_settings()
+            settings["message_debounce_enabled"] = "false"
+            settings["human_like_enabled"] = "false"
+            settings["global_enabled"] = "true"
+            return settings
+        monkeypatch.setattr(db, "get_settings", patched_get_settings)
+
+        # Send a customer message
+        msg = {
+            "from": {"id": 77777, "first_name": "Customer"},
+            "text": "你好，我想问个问题",
+            "chat": {"id": 5001, "type": "private"},
+            "message_id": 200,
+            "business_connection_id": "bc_test_002",
+        }
+
+        await runner.handle_business_message(msg)
+
+        # Verify: DeepSeek was called
+        assert len(deepseek_messages) > 0, "DeepSeek should be called for customer"
+
+        # Verify: Telegram send was called with correct bc_id and chat_id
+        assert len(sent_messages) == 1
+        assert sent_messages[0]["bc_id"] == "bc_test_002"
+        assert sent_messages[0]["chat_id"] == 5001
+        assert sent_messages[0]["text"] == "收到，我来处理。"
+
+        # Verify: messages recorded in v2
+        account = db.get_account(account_id)
+        conv = db.get_conversation(account_id, 5001)
+        assert conv is not None
+        msgs = db.list_messages_v2(conv["id"], 10)
+
+        # Should have inbound customer + outbound assistant_bot
+        inbound = [m for m in msgs if m["direction"] == "in"]
+        outbound = [m for m in msgs if m["direction"] == "out"]
+        assert len(inbound) == 1
+        assert inbound[0]["actor_type"] == "customer"
+        assert len(outbound) == 1
+        assert outbound[0]["actor_type"] == "assistant_bot"
+
+
+# ---------------------------------------------------------------------------
+# Media Group Settings Tests
+# ---------------------------------------------------------------------------
+
+
+class TestMediaGroupSettings:
+    """Tests for media group account-level settings."""
+
+    def test_media_group_v2_uses_account_settings(self, initialized_db, monkeypatch):
+        """
+        Requirement: _process_media_group_later_v2 must use account-level
+        settings, not just global settings.
+
+        We verify by checking that account-specific settings (like message_debounce_enabled)
+        are passed through to queue_text_or_reply_v2.
+        """
+        import asyncio
+        import db
+        from bot import BotRunner
+
+        runner = BotRunner()
+        runner.bot_id = 12345
+
+        # Create account with specific settings
+        account_id = db.create_account("1001", "测试账号")
+        db.update_account(account_id, {
+            "enabled": 1,
+            "default_reply_mode": "auto",
+            "message_debounce_enabled": 0,  # Account disables debounce
+        })
+
+        # Create conversation
+        conv_id = db.create_conversation(account_id, 5001, "private", "用户 A")
+
+        # Capture settings passed to queue_text_or_reply_v2
+        captured_settings = []
+
+        original_queue = runner.queue_text_or_reply_v2
+
+        async def fake_queue(conv_id, bc_id, acc_id, peer, msg_id, text, settings, **kwargs):
+            captured_settings.append(settings)
+            # Don't actually process
+
+        monkeypatch.setattr(runner, "queue_text_or_reply_v2", fake_queue)
+
+        # Simulate media group bucket
+        key = f"conv:{conv_id}:media:test_group"
+        runner.pending_media[key] = {
+            "items": [
+                {"text": "caption text", "message_type": "photo", "message_id": 300},
+            ],
+            "bc_id": "bc_test",
+            "conversation_id": conv_id,
+            "account_id": account_id,
+            "peer_chat_id": 5001,
+            "reply_to": 300,
+            "media_group_id": "test_group",
+        }
+
+        # Call the media group processor
+        asyncio.run(runner._process_media_group_later_v2(key, 0))
+
+        # Verify settings came from account, not just global
+        assert len(captured_settings) == 1
+        # message_debounce_enabled should be "false" (from account setting)
+        assert captured_settings[0].get("message_debounce_enabled") == "false"

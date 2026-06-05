@@ -546,12 +546,22 @@ class BotRunner:
         last = self.last_auto_reply.get(ck) or parse_iso(conversation.get("last_auto_reply_at"))
         return bool(last and time.time() - last < cooldown)
 
-    async def generate_reply_v2(self, conversation_id: int, settings: dict, resolved: dict, merged_text: str) -> str:
+    async def generate_reply_v2(
+        self,
+        conversation_id: int,
+        settings: dict,
+        resolved: dict,
+        merged_text: str,
+        exclude_message_ids: list[int] | None = None,
+    ) -> str:
         """
         v2 reply generation using recent_context_v2.
+
+        exclude_message_ids: messages_v2.id values to exclude from context
+        (e.g., the current batch being processed, to avoid duplication).
         """
         limit = as_int(settings.get("max_history_messages"), 12)
-        context = db.recent_context_v2(conversation_id, limit)
+        context = db.recent_context_v2(conversation_id, limit, exclude_message_ids=exclude_message_ids)
         db.log("INFO", "prompt", f"上下文来源 conversation_id={conversation_id}，加载历史消息 {len(context)} 条")
         messages = [{"role": "system", "content": resolved["prompt"]}]
         messages.extend(context)
@@ -623,9 +633,13 @@ class BotRunner:
         peer_chat_id,
         reply_to: int,
         texts: list[str],
+        exclude_message_ids: list[int] | None = None,
     ):
         """
         v2 text batch processing: decision + AI + send, all based on v2 conversation.
+
+        exclude_message_ids: messages_v2.id values to exclude from LLM context
+        (e.g., the current inbound batch, to avoid duplication with merged_text).
         """
         base_settings = db.get_settings()
         account = db.get_account(business_account_id)
@@ -658,7 +672,7 @@ class BotRunner:
 
         merged = self.merged_user_text(texts)
         try:
-            reply = await self.generate_reply_v2(conversation_id, settings, resolved, merged)
+            reply = await self.generate_reply_v2(conversation_id, settings, resolved, merged, exclude_message_ids=exclude_message_ids)
         except Exception as exc:
             db.log("ERROR", "deepseek", f"DeepSeek 调用失败：{exc}")
             reply = "AI 服务暂时不可用，请稍后再试。"
@@ -688,14 +702,19 @@ class BotRunner:
         text: str,
         settings: dict,
         force_now: bool = False,
+        inbound_row_ids: list[int] | None = None,
     ):
         """
         v2 text debounce: queues text for merging before processing.
+
+        inbound_row_ids: messages_v2.id values for the current batch
+        (to exclude from LLM context to avoid duplication).
         """
         if not as_bool(settings.get("message_debounce_enabled")) or force_now:
             await self.process_text_batch_v2(
                 conversation_id, business_connection_id, business_account_id,
                 peer_chat_id, message_id, [text],
+                exclude_message_ids=inbound_row_ids,
             )
             return
 
@@ -708,6 +727,7 @@ class BotRunner:
             "account_id": business_account_id,
             "peer_chat_id": peer_chat_id,
             "reply_to": message_id,
+            "inbound_row_ids": [],
         })
         bucket["items"].append({"text": text, "message_id": message_id})
         bucket["bc_id"] = business_connection_id
@@ -715,6 +735,9 @@ class BotRunner:
         bucket["account_id"] = business_account_id
         bucket["peer_chat_id"] = peer_chat_id
         bucket["reply_to"] = message_id
+        # Accumulate inbound_row_ids
+        if inbound_row_ids:
+            bucket.setdefault("inbound_row_ids", []).extend(inbound_row_ids)
         task = bucket.get("task")
         if task:
             task.cancel()
@@ -737,11 +760,13 @@ class BotRunner:
             if not bucket:
                 return
             texts = [i["text"] for i in bucket["items"] if i.get("text")]
+            inbound_row_ids = bucket.get("inbound_row_ids") or []
             db.log("INFO", "merge",
                 f"合并 {len(texts)} 条消息后调用 AI：conversation_id={bucket['conversation_id']}")
             await self.process_text_batch_v2(
                 bucket["conversation_id"], bucket["bc_id"], bucket["account_id"],
                 bucket["peer_chat_id"], bucket["reply_to"], texts,
+                exclude_message_ids=inbound_row_ids if inbound_row_ids else None,
             )
         except asyncio.CancelledError:
             pass
@@ -802,7 +827,7 @@ class BotRunner:
         message_type = self.detect_message_type(msg)
         media_group_id = msg.get("media_group_id")
 
-        db.add_message_v2(
+        inbound_row_id = db.add_message_v2(
             conversation_id, account_id,
             msg.get("message_id"), "in", actor_type,
             text, message_type, raw_json=msg,
@@ -838,6 +863,7 @@ class BotRunner:
             await self.queue_text_or_reply_v2(
                 conversation_id, bc_id, account_id, peer_chat_id,
                 msg.get("message_id"), text, settings,
+                inbound_row_ids=[inbound_row_id],
             )
             return
 
@@ -881,6 +907,7 @@ class BotRunner:
     async def _process_media_group_later_v2(self, key: str, delay: float):
         """
         v2 media group debounce callback.
+        Uses account-level settings instead of global settings.
         """
         try:
             await asyncio.sleep(delay)
@@ -892,7 +919,9 @@ class BotRunner:
             db.log("INFO", "media",
                 f"收到媒体组，已合并处理，media_group_id={bucket['media_group_id']}，"
                 f"数量={len(items)}")
-            settings = db.get_settings()
+            # Use account-level settings, not just global
+            account = db.get_account(bucket.get("account_id"))
+            settings = db.resolve_account_settings(db.get_settings(), account)
             if captions:
                 await self.queue_text_or_reply_v2(
                     bucket["conversation_id"], bucket["bc_id"], bucket["account_id"],

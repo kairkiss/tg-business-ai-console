@@ -817,10 +817,11 @@ def add_message_v2(
     text: str | None,
     message_type: str = "text",
     raw_json=None,
-):
+) -> int:
     """
     Record a message in the v2 messages table.
     actor_type must be one of VALID_ACTOR_TYPES.
+    Returns the inserted row id.
     """
     if actor_type not in VALID_ACTOR_TYPES:
         raise ValueError(f"Invalid actor_type: {actor_type}. Must be one of {VALID_ACTOR_TYPES}")
@@ -829,7 +830,7 @@ def add_message_v2(
     if raw_json is not None and not isinstance(raw_json, str):
         raw = json.dumps(raw_json, ensure_ascii=False)[:12000]
     with connect() as conn:
-        conn.execute(
+        cur = conn.execute(
             """INSERT INTO messages_v2 (
                 conversation_id, business_account_id, telegram_message_id,
                 direction, actor_type, text, message_type, raw_json, created_at
@@ -837,9 +838,10 @@ def add_message_v2(
             (conversation_id, business_account_id, telegram_message_id,
              direction, actor_type, text, message_type, raw, ts)
         )
+        return int(cur.lastrowid)
 
 
-def recent_context_v2(conversation_id: int, limit: int):
+def recent_context_v2(conversation_id: int, limit: int, exclude_message_ids: list[int] | None = None):
     """
     Get recent context for LLM consumption.
 
@@ -847,13 +849,23 @@ def recent_context_v2(conversation_id: int, limit: int):
     - actor_type == customer → role=user
     - actor_type == assistant_bot AND direction=out → role=assistant
     - All others are excluded from LLM context
+
+    exclude_message_ids: list of messages_v2.id to exclude (e.g., current batch).
     """
+    exclude_clause = ""
+    params: list = [conversation_id]
+    if exclude_message_ids:
+        placeholders = ",".join("?" for _ in exclude_message_ids)
+        exclude_clause = f" AND id NOT IN ({placeholders})"
+        params.extend(exclude_message_ids)
+    params.append(limit)
+
     with connect() as conn:
         rows = conn.execute(
-            """SELECT actor_type, direction, text FROM messages_v2
-               WHERE conversation_id=? AND text IS NOT NULL AND text != ''
-               ORDER BY id DESC LIMIT ?""",
-            (conversation_id, limit)
+            f"""SELECT actor_type, direction, text FROM messages_v2
+                WHERE conversation_id=? AND text IS NOT NULL AND text != ''{exclude_clause}
+                ORDER BY id DESC LIMIT ?""",
+            params
         ).fetchall()
 
     result = []
