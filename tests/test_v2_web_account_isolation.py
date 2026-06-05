@@ -432,3 +432,102 @@ class TestConversationSettingsSave:
             },
         )
         assert response.status_code == 400
+
+    def test_conversation_settings_save_requires_csrf(
+        self, client, sample_accounts_and_conversations
+    ):
+        """Verify POST without valid CSRF is rejected."""
+        import db
+        data = sample_accounts_and_conversations
+
+        # Try with empty csrf
+        response = client.post(
+            f"/accounts/{data['account_x_id']}/conversations/{data['conv_x']}/save",
+            data={
+                "csrf": "",
+                "mode": "auto",
+                "prompt_mode": "account",
+            },
+        )
+        assert response.status_code == 403
+
+        # Try with wrong csrf
+        response = client.post(
+            f"/accounts/{data['account_x_id']}/conversations/{data['conv_x']}/save",
+            data={
+                "csrf": "wrong_csrf_token",
+                "mode": "auto",
+                "prompt_mode": "account",
+            },
+        )
+        assert response.status_code == 403
+
+        # Verify conversation was NOT modified
+        conv = db.get_conversation_by_id(data['conv_x'])
+        assert conv["mode"] == "default"
+
+    def test_conversation_settings_save_rejects_invalid_persona_id(
+        self, client, sample_accounts_and_conversations
+    ):
+        """Verify non-numeric persona_id returns 400."""
+        import db
+        data = sample_accounts_and_conversations
+        csrf = self._get_csrf(client, data['account_x_id'], data['conv_x'])
+
+        response = client.post(
+            f"/accounts/{data['account_x_id']}/conversations/{data['conv_x']}/save",
+            data={
+                "csrf": csrf,
+                "mode": "default",
+                "prompt_mode": "persona",
+                "persona_id": "not-a-number",
+            },
+        )
+        assert response.status_code == 400
+
+        # Verify conversation was NOT modified
+        conv = db.get_conversation_by_id(data['conv_x'])
+        assert conv["persona_id"] is None
+
+    def test_conversation_settings_save_accepts_persona_and_takeover_exempt(
+        self, client, sample_accounts_and_conversations
+    ):
+        """Verify saving with valid persona_id and takeover_exempt=true."""
+        import db
+        data = sample_accounts_and_conversations
+        csrf = self._get_csrf(client, data['account_x_id'], data['conv_x'])
+
+        # Get a valid persona_id (use default persona)
+        settings = db.get_settings()
+        default_persona_id = settings.get("default_prompt_persona_id")
+        if not default_persona_id:
+            # Get first persona
+            personas = db.list_personas(include_disabled=False)
+            default_persona_id = str(personas[0]["id"]) if personas else None
+
+        assert default_persona_id, "No persona available for test"
+
+        response = client.post(
+            f"/accounts/{data['account_x_id']}/conversations/{data['conv_x']}/save",
+            data={
+                "csrf": csrf,
+                "mode": "manual",
+                "prompt_mode": "persona",
+                "persona_id": default_persona_id,
+                "takeover_exempt": "true",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+        # Verify conversation was updated correctly
+        conv = db.get_conversation_by_id(data['conv_x'])
+        assert conv["mode"] == "manual"
+        assert conv["prompt_mode"] == "persona"
+        assert conv["persona_id"] == int(default_persona_id)
+        assert conv["takeover_exempt"] == 1
+
+        # Verify other account's conversation is unaffected
+        conv_y = db.get_conversation_by_id(data['conv_y'])
+        assert conv_y["mode"] == "default"
+        assert conv_y["takeover_exempt"] == 0

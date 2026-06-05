@@ -79,6 +79,7 @@ recent_context_v2(conversation_id, limit, exclude_message_ids):
 - ✅ 非法 mode/prompt_mode 返回 400
 - ✅ `/conversations/{cid}` 快捷重定向到 account-scoped URL
 - ✅ 跨账号访问返回 404
+- ✅ conversation settings save 校验 CSRF、persona_id 类型、mode/prompt_mode 合法性
 - 旧 `/chats/{chat_id}` 路由保留 (标记为 Legacy)
 
 ### Media Group

@@ -205,11 +205,19 @@ async def conversation_settings_save(
     if prompt_mode not in VALID_PROMPT_MODES:
         raise HTTPException(400, f"无效的提示词模式: {prompt_mode}")
 
+    # Validate persona_id
+    persona_id_value = None
+    if persona_id:
+        try:
+            persona_id_value = int(persona_id)
+        except ValueError:
+            raise HTTPException(400, "无效的人格 ID")
+
     # Build update values
     values = {
         "mode": mode,
         "prompt_mode": prompt_mode,
-        "persona_id": int(persona_id) if persona_id else None,
+        "persona_id": persona_id_value,
         "custom_prompt": custom_prompt or None,
         "custom_prompt_enabled": 1 if custom_prompt_enabled == "true" else 0,
         "takeover_exempt": 1 if takeover_exempt == "true" else 0,
