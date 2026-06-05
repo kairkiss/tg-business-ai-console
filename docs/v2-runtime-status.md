@@ -73,10 +73,13 @@ recent_context_v2(conversation_id, limit, exclude_message_ids):
 - ✅ connection id 在模板中脱敏显示 (mask_id)
 - ✅ `/accounts/{id}/conversations` 显示该账号的 v2 conversations
 - ✅ `/accounts/{id}/conversations/{cid}` 显示 conversation 详情 (含消息)
+- ✅ `/accounts/{id}/conversations/{cid}/save` 保存 conversation 设置 (account-scoped)
+- ✅ conversation 设置保存只影响目标 conversation，不影响同 peer 其它账号
+- ✅ 跨账号 POST 被拒绝 (404)
+- ✅ 非法 mode/prompt_mode 返回 400
 - ✅ `/conversations/{cid}` 快捷重定向到 account-scoped URL
 - ✅ 跨账号访问返回 404
 - 旧 `/chats/{chat_id}` 路由保留 (标记为 Legacy)
-- Web 设置修改仍可能部分依赖旧 routes
 
 ### Media Group
 

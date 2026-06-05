@@ -28,6 +28,59 @@
 </section>
 
 <section class="panel">
+    <h2>对话设置</h2>
+    <p class="hint">此设置只影响当前 v2 conversation，不会影响同一 peer 在其它 Business 账号下的 conversation。</p>
+    <form class="form" method="post" action="/accounts/{{ account.id }}/conversations/{{ conversation.id }}/save">
+        <input type="hidden" name="csrf" value="{{ csrf_token }}">
+
+        <label>回复模式
+            <select name="mode">
+                <option value="default" {% if conversation.mode == 'default' %}selected{% endif %}>default 跟随账号</option>
+                <option value="auto" {% if conversation.mode == 'auto' %}selected{% endif %}>auto 自动回复</option>
+                <option value="manual" {% if conversation.mode == 'manual' %}selected{% endif %}>manual 只记录</option>
+                <option value="off" {% if conversation.mode == 'off' %}selected{% endif %}>off 绝对不回复</option>
+            </select>
+        </label>
+
+        <label>提示词模式
+            <select name="prompt_mode">
+                <option value="account" {% if conversation.prompt_mode == 'account' %}selected{% endif %}>跟随账号默认</option>
+                <option value="global" {% if conversation.prompt_mode == 'global' %}selected{% endif %}>使用全局默认人格</option>
+                <option value="persona" {% if conversation.prompt_mode == 'persona' %}selected{% endif %}>使用指定人格</option>
+                <option value="custom" {% if conversation.prompt_mode == 'custom' %}selected{% endif %}>使用本对话专属提示词</option>
+            </select>
+        </label>
+
+        <label>指定人格
+            <select name="persona_id">
+                <option value="">继承</option>
+                {% for p in all_personas %}
+                <option value="{{ p.id }}" {% if conversation.persona_id|string == p.id|string %}selected{% endif %}>{{ p.name }}</option>
+                {% endfor %}
+            </select>
+        </label>
+
+        <label class="switch">
+            <input type="checkbox" name="custom_prompt_enabled" value="true" {% if conversation.custom_prompt_enabled %}checked{% endif %}>
+            <span></span>
+            <b>启用本对话专属提示词</b>
+        </label>
+
+        <label>本对话专属提示词
+            <textarea name="custom_prompt" rows="8">{{ conversation.custom_prompt or '' }}</textarea>
+        </label>
+
+        <label class="switch">
+            <input type="checkbox" name="takeover_exempt" value="true" {% if conversation.takeover_exempt %}checked{% endif %}>
+            <span></span>
+            <b>排除全面接管</b>
+        </label>
+
+        <button class="primary">保存对话设置</button>
+    </form>
+</section>
+
+<section class="panel">
     <h2>v2 消息记录</h2>
     <p class="hint">显示最近 200 条消息，按时间倒序。actor_type 标记消息来源。</p>
     <div class="messages">

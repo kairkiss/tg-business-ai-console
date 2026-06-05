@@ -166,6 +166,61 @@ async def account_conversation_detail(request: Request, account_id: int, convers
     ))
 
 
+VALID_MODES = {"auto", "manual", "off", "default"}
+VALID_PROMPT_MODES = {"account", "global", "persona", "custom"}
+
+
+@router.post("/accounts/{account_id}/conversations/{conversation_id}/save")
+async def conversation_settings_save(
+    request: Request,
+    account_id: int,
+    conversation_id: int,
+    csrf: str = Form(...),
+    mode: str = Form("default"),
+    prompt_mode: str = Form("account"),
+    persona_id: str = Form(""),
+    custom_prompt: str = Form(""),
+    custom_prompt_enabled: str = Form("false"),
+    takeover_exempt: str = Form("false"),
+    _: None = Depends(require_auth),
+):
+    """Save v2 conversation settings, validated against account_id."""
+    check_csrf(request, csrf)
+
+    # Validate account exists
+    account = db.get_account(account_id)
+    if not account:
+        raise HTTPException(404, "账号不存在")
+
+    # Validate conversation exists and belongs to this account
+    conversation = db.get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(404, "对话不存在")
+    if conversation["business_account_id"] != account_id:
+        raise HTTPException(404, "对话不属于此账号")
+
+    # Validate mode
+    if mode not in VALID_MODES:
+        raise HTTPException(400, f"无效的回复模式: {mode}")
+    if prompt_mode not in VALID_PROMPT_MODES:
+        raise HTTPException(400, f"无效的提示词模式: {prompt_mode}")
+
+    # Build update values
+    values = {
+        "mode": mode,
+        "prompt_mode": prompt_mode,
+        "persona_id": int(persona_id) if persona_id else None,
+        "custom_prompt": custom_prompt or None,
+        "custom_prompt_enabled": 1 if custom_prompt_enabled == "true" else 0,
+        "takeover_exempt": 1 if takeover_exempt == "true" else 0,
+    }
+
+    db.update_conversation(conversation_id, values)
+    db.log("INFO", "web", f"v2 对话设置已保存：conversation_id={conversation_id} account_id={account_id}")
+    flash(request, "对话设置已保存")
+    return RedirectResponse(f"/accounts/{account_id}/conversations/{conversation_id}", 303)
+
+
 @router.get("/conversations/{conversation_id}")
 async def conversation_shortcut(request: Request, conversation_id: int, _: None = Depends(require_auth)):
     """Shortcut redirect: /conversations/{id} → /accounts/{account_id}/conversations/{id}"""

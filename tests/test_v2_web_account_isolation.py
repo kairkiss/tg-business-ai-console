@@ -293,3 +293,142 @@ class TestAccountUpdateBoundary:
         assert account["latest_business_connection_id"] != "bc_fake_override_attempt"
         # But enabled should be updated
         assert account["enabled"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Conversation Settings Save Tests
+# ---------------------------------------------------------------------------
+
+class TestConversationSettingsSave:
+    """Tests for POST /accounts/{id}/conversations/{cid}/save."""
+
+    def _get_csrf(self, client, account_id, conversation_id):
+        """Helper to get CSRF token from the conversation detail page."""
+        response = client.get(f"/accounts/{account_id}/conversations/{conversation_id}")
+        # Extract CSRF from meta tag
+        import re
+        match = re.search(r'name="csrf-token" content="([^"]+)"', response.text)
+        if match:
+            return match.group(1)
+        # Fallback: get from session
+        return client.cookies.get("session", "")
+
+    def test_conversation_settings_save_updates_v2_conversation(
+        self, client, sample_accounts_and_conversations
+    ):
+        """Verify saving conversation settings updates the v2 conversation."""
+        import db
+        data = sample_accounts_and_conversations
+        csrf = self._get_csrf(client, data['account_x_id'], data['conv_x'])
+
+        # Save settings
+        response = client.post(
+            f"/accounts/{data['account_x_id']}/conversations/{data['conv_x']}/save",
+            data={
+                "csrf": csrf,
+                "mode": "auto",
+                "prompt_mode": "custom",
+                "persona_id": "",
+                "custom_prompt": "测试专属提示词",
+                "custom_prompt_enabled": "true",
+                "takeover_exempt": "false",
+            },
+            follow_redirects=False,
+        )
+        # Should redirect back
+        assert response.status_code == 303
+
+        # Verify conversation was updated
+        conv = db.get_conversation_by_id(data["conv_x"])
+        assert conv["mode"] == "auto"
+        assert conv["prompt_mode"] == "custom"
+        assert conv["custom_prompt"] == "测试专属提示词"
+        assert conv["custom_prompt_enabled"] == 1
+        assert conv["takeover_exempt"] == 0
+
+    def test_conversation_settings_save_does_not_affect_other_account_same_peer(
+        self, client, sample_accounts_and_conversations
+    ):
+        """Verify saving one account's conversation doesn't affect the other."""
+        import db
+        data = sample_accounts_and_conversations
+        csrf = self._get_csrf(client, data['account_x_id'], data['conv_x'])
+
+        # Save settings for account X's conversation
+        client.post(
+            f"/accounts/{data['account_x_id']}/conversations/{data['conv_x']}/save",
+            data={
+                "csrf": csrf,
+                "mode": "auto",
+                "prompt_mode": "account",
+                "persona_id": "",
+                "custom_prompt": "",
+                "custom_prompt_enabled": "false",
+                "takeover_exempt": "false",
+            },
+        )
+
+        # Verify account Y's conversation is unchanged
+        conv_y = db.get_conversation_by_id(data["conv_y"])
+        assert conv_y["mode"] == "default"  # Should still be default
+
+    def test_conversation_settings_save_rejects_cross_account(
+        self, client, sample_accounts_and_conversations
+    ):
+        """Verify cross-account POST is rejected."""
+        import db
+        data = sample_accounts_and_conversations
+        csrf = self._get_csrf(client, data['account_x_id'], data['conv_x'])
+
+        # Try to save account X's conversation via account Y's URL
+        response = client.post(
+            f"/accounts/{data['account_y_id']}/conversations/{data['conv_x']}/save",
+            data={
+                "csrf": csrf,
+                "mode": "auto",
+                "prompt_mode": "account",
+                "persona_id": "",
+                "custom_prompt": "",
+                "custom_prompt_enabled": "false",
+                "takeover_exempt": "false",
+            },
+        )
+        assert response.status_code == 404
+
+        # Verify conversation was NOT modified
+        conv_x = db.get_conversation_by_id(data["conv_x"])
+        assert conv_x["mode"] == "default"
+
+    def test_conversation_settings_save_rejects_invalid_mode(
+        self, client, sample_accounts_and_conversations
+    ):
+        """Verify invalid mode returns 400."""
+        data = sample_accounts_and_conversations
+        csrf = self._get_csrf(client, data['account_x_id'], data['conv_x'])
+
+        response = client.post(
+            f"/accounts/{data['account_x_id']}/conversations/{data['conv_x']}/save",
+            data={
+                "csrf": csrf,
+                "mode": "invalid_mode",
+                "prompt_mode": "account",
+            },
+        )
+        assert response.status_code == 400
+
+    def test_conversation_settings_save_rejects_invalid_prompt_mode(
+        self, client, sample_accounts_and_conversations
+    ):
+        """Verify invalid prompt_mode returns 400."""
+        data = sample_accounts_and_conversations
+        csrf = self._get_csrf(client, data['account_x_id'], data['conv_x'])
+
+        response = client.post(
+            f"/accounts/{data['account_x_id']}/conversations/{data['conv_x']}/save",
+            data={
+                "csrf": csrf,
+                "mode": "default",
+                "prompt_mode": "invalid_prompt_mode",
+            },
+        )
+        assert response.status_code == 400
