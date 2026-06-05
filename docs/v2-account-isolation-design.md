@@ -2,7 +2,36 @@
 
 > 分支: v2.0-account-isolation
 > 日期: 2026-06-04
-> 状态: 设计阶段，未开始实现
+> 状态: Bot 侧已完成，Web 侧待实施
+
+---
+
+## Implementation Status / 实施状态
+
+### ✅ 已完成
+
+| Phase | 内容 | 状态 |
+|-------|------|------|
+| Phase 0 | pytest 基础设施与 SQLite 备份脚本 | ✅ 完成 |
+| Phase 1 | v2 schema、conversations/messages_v2 表、user_version=6、v2 db helpers | ✅ 完成 |
+| Phase 2 | business_connection/account resolution helpers、actor classification | ✅ 完成 |
+| Phase 3A | Business 文本消息主路径接入 v2 conversation/message 模型 | ✅ 完成 |
+| Phase 3B | 上下文去重、真实 handle_business_message async 测试、媒体组账号级 settings | ✅ 完成 |
+| Phase 3C | 测试描述清理、文档同步 | ✅ 完成 |
+
+### ⏳ 未完成
+
+- Web 路由仍主要基于旧 `/chats/{chat_id}`
+- templates 尚未完全账号隔离
+- legacy chats/messages 仍保留
+- README 尚未完整更新 v2 运行说明
+- 还没有 release/tag
+
+### 关键说明
+
+**Bot 侧文本自动回复主路径现在以 `business_account_id + peer_chat_id` 的 conversation 为隔离单位。**
+
+Web 侧还没有完成账号隔离，因此不要把 v2 分支合并到 main 作为成品发布。
 
 ---
 

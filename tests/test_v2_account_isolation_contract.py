@@ -1,13 +1,17 @@
 """
-v2 Account Isolation Contract Tests.
+v2 Account Isolation Contract and Regression Tests.
 
-These tests define the behavioral contract for the v2 multi-account isolation feature.
-They are expected to FAIL (xfail) until the v2 implementation is complete.
+These tests protect the v2 multi-account isolation model:
+- account + peer conversation isolation (UNIQUE business_account_id + peer_chat_id)
+- actor classification (customer / business_self / assistant_bot / owner_operator / system)
+- v2 reply decision (decide_reply_v2)
+- v2 message recording and context (messages_v2, recent_context_v2)
+- async handle_business_message text path
+- context de-duplication (exclude_message_ids)
+- media group account-level settings
 
-Each test corresponds to a requirement from the v2 design document:
-- docs/v2-account-isolation-design.md
-
-When implementing v2, change xfail markers to regular tests as each feature is completed.
+Design reference: docs/v2-account-isolation-design.md
+Runtime status: docs/v2-runtime-status.md
 """
 
 from __future__ import annotations
@@ -660,7 +664,6 @@ class TestContextDeduplication:
 
         # Capture messages sent to deepseek.chat
         captured_messages = []
-        original_chat = runner.deepseek.chat
 
         async def fake_chat(messages, *args, **kwargs):
             captured_messages.extend(messages)
