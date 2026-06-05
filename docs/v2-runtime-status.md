@@ -68,9 +68,13 @@ recent_context_v2(conversation_id, limit, exclude_message_ids):
 
 ### Web UI
 
-- Web 控制台仍使用旧 `/chats/{chat_id}` 路由
-- 同一 peer_chat_id 在不同账号下的聊天可能显示为同一个
-- 需要 Phase 4 实现账号隔离路由
+- ✅ `/accounts` 列出所有 Business 账号
+- ✅ `/accounts/{id}/conversations` 显示该账号的 v2 conversations
+- ✅ `/accounts/{id}/conversations/{cid}` 显示 conversation 详情 (含消息)
+- ✅ `/conversations/{cid}` 快捷重定向到 account-scoped URL
+- ✅ 跨账号访问返回 404
+- 旧 `/chats/{chat_id}` 路由保留 (标记为 Legacy)
+- Web 设置修改仍可能部分依赖旧 routes
 
 ### Media Group
 
@@ -94,7 +98,9 @@ recent_context_v2(conversation_id, limit, exclude_message_ids):
 
 ## Do Not Release As Stable Until
 
-- [ ] Web 隔离完成
+- [x] Web 只读视图完成 (Phase 4A)
+- [ ] Web 设置修改路由完成
+- [ ] templates 完全产品化
 - [ ] README 更新
 - [ ] 部署文档更新
 - [ ] 创建 release/tag

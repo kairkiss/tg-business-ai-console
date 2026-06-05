@@ -1,0 +1,48 @@
+{% extends "base.html" %}{% block content %}
+<h1>对话详情</h1>
+<div class="actions-row">
+    <a class="button" href="/accounts/{{ account.id }}/conversations">← 返回对话列表</a>
+    <a class="button" href="/accounts/{{ account.id }}">← 账号详情</a>
+    <a class="button" href="/accounts">← 所有账号</a>
+</div>
+
+<section class="cards">
+    <div class="card"><span>所属账号</span><b>{{ account.account_name or account.business_user_id }}</b></div>
+    <div class="card"><span>conversation_id</span><b>{{ conversation.id }}</b></div>
+    <div class="card"><span>peer_chat_id</span><b>{{ conversation.peer_chat_id }}</b></div>
+    <div class="card"><span>peer 类型</span><b>{{ conversation.peer_type or 'private' }}</b></div>
+    <div class="card"><span>回复模式</span><b class="mode {{ conversation.mode }}">{{ mode_label(conversation.mode) }}</b></div>
+    <div class="card"><span>Prompt 模式</span><b>{{ conversation.prompt_mode or 'account' }}</b></div>
+    <div class="card"><span>最近消息</span><b>{{ conversation.last_message_at or '-' }}</b></div>
+    <div class="card"><span>创建时间</span><b>{{ conversation.created_at or '-' }}</b></div>
+</section>
+
+<section class="panel">
+    <h2>Peer 信息</h2>
+    <div class="cards">
+        <div class="card"><span>昵称</span><b>{{ conversation.peer_title or conversation.peer_first_name or '-' }}</b></div>
+        <div class="card"><span>用户名</span><b>{{ '@' ~ conversation.peer_username if conversation.peer_username else '-' }}</b></div>
+        <div class="card"><span>名</span><b>{{ conversation.peer_first_name or '-' }}</b></div>
+        <div class="card"><span>姓</span><b>{{ conversation.peer_last_name or '-' }}</b></div>
+    </div>
+</section>
+
+<section class="panel">
+    <h2>v2 消息记录</h2>
+    <p class="hint">显示最近 200 条消息，按时间倒序。actor_type 标记消息来源。</p>
+    <div class="messages">
+    {% for m in messages %}
+        <div class="msg {{ m.direction }}">
+            <small>
+                {{ m.created_at }} · {{ m.direction }}/{{ m.actor_type }}
+                {% if m.telegram_message_id %} · tg_msg={{ m.telegram_message_id }}{% endif %}
+                {% if m.message_type != 'text' %} · {{ m.message_type }}{% endif %}
+            </small>
+            <p>{{ (m.text or '')[:500] }}{% if m.text and m.text|length > 500 %}...{% endif %}</p>
+        </div>
+    {% else %}
+        <p class="hint">暂无消息记录。</p>
+    {% endfor %}
+    </div>
+</section>
+{% endblock %}

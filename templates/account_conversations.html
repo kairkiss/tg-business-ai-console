@@ -1,0 +1,41 @@
+{% extends "base.html" %}{% block content %}
+<h1>v2 对话列表</h1>
+<div class="actions-row">
+    <a class="button" href="/accounts/{{ account.id }}">← 返回账号详情</a>
+    <a class="button" href="/accounts">← 所有账号</a>
+</div>
+<section class="cards">
+    <div class="card"><span>账号</span><b>{{ account.account_name or account.business_user_id }}</b></div>
+    <div class="card"><span>对话数量</span><b>{{ conversation_count }}</b></div>
+    <div class="card"><span>状态</span><b>{{ '启用' if account.enabled else '暂停' }}</b></div>
+    <div class="card"><span>默认模式</span><b>{{ mode_label(account.default_reply_mode) }}</b></div>
+</section>
+<p class="hint">此页面显示 v2 conversations，按 business_account_id + peer_chat_id 隔离。同一个 peer 在不同账号下会显示为不同对话。</p>
+<section class="chat-cards">
+{% for c in conversations %}
+<article class="chat-card">
+    <h2>{{ c.peer_title or c.peer_first_name or c.peer_username or c.peer_chat_id }}</h2>
+    <p>
+        {% if c.peer_username %}@{{ c.peer_username }} · {% endif %}
+        peer_chat_id: {{ c.peer_chat_id }} ·
+        conversation_id: {{ c.id }}
+    </p>
+    <div class="badges">
+        <span class="mode {{ c.mode }}">{{ mode_label(c.mode) }}</span>
+        <span class="badge">Prompt：{{ c.prompt_mode or 'account' }}</span>
+        {% if c.persona_id %}<span class="badge">人格 ID：{{ c.persona_id }}</span>{% endif %}
+        {% if c.custom_prompt_enabled %}<span class="badge">专属提示词</span>{% endif %}
+        {% if c.takeover_exempt %}<span class="badge warn">排除接管</span>{% endif %}
+    </div>
+    <small>最近消息：{{ c.last_message_at or '-' }} · 更新：{{ c.updated_at or '-' }}</small>
+    <div class="actions-row">
+        <a class="button primary" href="/accounts/{{ account.id }}/conversations/{{ c.id }}">查看详情</a>
+    </div>
+</article>
+{% else %}
+<div class="panel">
+    <p>此账号暂无 v2 对话。收到 Business 消息后会自动创建。</p>
+</div>
+{% endfor %}
+</section>
+{% endblock %}

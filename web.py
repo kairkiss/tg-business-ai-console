@@ -108,6 +108,58 @@ async def account_toggle(request:Request, account_id:int, csrf:str=Form(...), fi
     if field not in {"enabled","full_takeover_enabled"}: raise HTTPException(400,"字段不允许")
     cur=int(acc.get(field) or 0); db.update_account(account_id,{field:0 if cur else 1}); return RedirectResponse("/accounts",303)
 
+
+# ---------------------------------------------------------------------------
+# v2 Account Isolation Read-Only Views
+# ---------------------------------------------------------------------------
+
+@router.get("/accounts/{account_id}/conversations")
+async def account_conversations(request: Request, account_id: int, _: None = Depends(require_auth)):
+    """List v2 conversations for a specific account."""
+    account = db.get_account(account_id)
+    if not account:
+        raise HTTPException(404, "账号不存在")
+    conversations = db.list_conversations(account_id)
+    conversation_count = len(conversations)
+    return templates.TemplateResponse("account_conversations.html", context(
+        request,
+        account=account,
+        conversations=conversations,
+        conversation_count=conversation_count,
+    ))
+
+
+@router.get("/accounts/{account_id}/conversations/{conversation_id}")
+async def account_conversation_detail(request: Request, account_id: int, conversation_id: int, _: None = Depends(require_auth)):
+    """Show conversation detail, validated against account_id."""
+    account = db.get_account(account_id)
+    if not account:
+        raise HTTPException(404, "账号不存在")
+    conversation = db.get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(404, "对话不存在")
+    # Validate account isolation: conversation must belong to this account
+    if conversation["business_account_id"] != account_id:
+        raise HTTPException(404, "对话不属于此账号")
+    messages = db.list_messages_v2(conversation_id, limit=200)
+    return templates.TemplateResponse("conversation_detail.html", context(
+        request,
+        account=account,
+        conversation=conversation,
+        messages=messages,
+    ))
+
+
+@router.get("/conversations/{conversation_id}")
+async def conversation_shortcut(request: Request, conversation_id: int, _: None = Depends(require_auth)):
+    """Shortcut redirect: /conversations/{id} → /accounts/{account_id}/conversations/{id}"""
+    conversation = db.get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(404, "对话不存在")
+    account_id = conversation["business_account_id"]
+    return RedirectResponse(f"/accounts/{account_id}/conversations/{conversation_id}", 302)
+
+
 @router.get("/personas")
 async def personas_page(request:Request, _:None=Depends(require_auth)):
     return templates.TemplateResponse("personas.html", context(request, personas=db.list_personas(True)))

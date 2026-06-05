@@ -92,16 +92,36 @@ def _no_real_network(monkeypatch):
 
     If a test needs network access, it must explicitly monkeypatch
     the relevant client with a fake implementation.
+
+    Note: This allows httpx to work for local ASGI transport (TestClient),
+    but blocks requests to real external URLs.
     """
     import httpx
 
-    def _blocked_request(*args, **kwargs):
+    _original_async_request = httpx.AsyncClient.request
+    _original_sync_request = httpx.Client.request
+
+    async def _guarded_async_request(self, method, url, **kwargs):
+        # Allow local/test URLs (TestClient uses "http://testserver")
+        url_str = str(url)
+        if "testserver" in url_str or "localhost" in url_str or "127.0.0.1" in url_str:
+            return await _original_async_request(self, method, url, **kwargs)
         raise RuntimeError(
-            "Network access is disabled in tests. "
+            f"Network access is disabled in tests (attempted {method} {url}). "
             "If this test needs network, monkeypatch the client with a fake."
         )
 
-    # Block httpx.AsyncClient.request
-    monkeypatch.setattr(httpx.AsyncClient, "request", _blocked_request)
-    # Block httpx.Client.request (sync)
-    monkeypatch.setattr(httpx.Client, "request", _blocked_request)
+    def _guarded_sync_request(self, method, url, **kwargs):
+        # Allow local/test URLs (TestClient uses "http://testserver")
+        url_str = str(url)
+        if "testserver" in url_str or "localhost" in url_str or "127.0.0.1" in url_str:
+            return _original_sync_request(self, method, url, **kwargs)
+        raise RuntimeError(
+            f"Network access is disabled in tests (attempted {method} {url}). "
+            "If this test needs network, monkeypatch the client with a fake."
+        )
+
+    # Block httpx.AsyncClient.request (but allow local URLs)
+    monkeypatch.setattr(httpx.AsyncClient, "request", _guarded_async_request)
+    # Block httpx.Client.request (sync, but allow local URLs)
+    monkeypatch.setattr(httpx.Client, "request", _guarded_sync_request)

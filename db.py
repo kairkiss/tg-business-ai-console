@@ -960,3 +960,28 @@ def get_latest_connection_for_account(account_id: int):
             (bc_id,)
         ).fetchone()
     return row_to_dict(row)
+
+
+def count_conversations_for_account(account_id: int) -> int:
+    """
+    Count conversations for a given account.
+    Read-only, parameterized SQL.
+    """
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) as c FROM conversations WHERE business_account_id=?",
+            (account_id,)
+        ).fetchone()
+    return int(row["c"])
+
+
+def get_conversation_with_account(conversation_id: int):
+    """
+    Get conversation with account info for validation.
+    Returns (conversation, account) tuple or (None, None).
+    """
+    conv = get_conversation_by_id(conversation_id)
+    if not conv:
+        return None, None
+    account = get_account(conv["business_account_id"])
+    return conv, account
